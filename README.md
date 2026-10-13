@@ -49,4 +49,4 @@ Production bundle and TypeScript checks pass. Planner tests cover financial seed
 
 ## Private initial data
 
-Client names, financial details, and personal schedule overrides are excluded from this public repository. Set the server-only secret `INITIAL_WORKSPACE_JSON` to a validated State object when provisioning a private instance. It initializes an authenticated user’s workspace once; subsequent edits are stored in D1. Without it, new accounts start with an empty project list. Never put that value in client code, Git, or a NEXT_PUBLIC environment variable.
+Client names, financial details, and personal schedule overrides are excluded from this public repository. Split a validated State JSON object into server-only secrets `INITIAL_WORKSPACE_JSON_1`, `_2`, and `_3` (each under the hosting value-size limit) when provisioning a private instance. It initializes an authenticated user’s workspace once; subsequent edits are stored in D1. Without it, new accounts start with an empty project list. Never put that value in client code, Git, or a NEXT_PUBLIC environment variable.
