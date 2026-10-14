@@ -19,7 +19,7 @@ export const stateSchema = z.object({
  sessions:z.array(z.object({id,projectId:id,taskId:id,date,title:z.string().max(400),minutes:z.number().int().min(1).max(480),ranking:z.string().max(40000).optional()})).max(20000).default([]),
  inbox: z.array(z.object({id,text:z.string().min(1).max(10000),date})).max(500),
  events: z.array(z.object({id,date,atMinute:z.number().int().min(0).max(1439).optional(),title:z.string().max(400),xp:z.number().int().min(0).max(500),kind:z.enum(['task','routine','project','focus'])})).max(20000),
- payments: z.array(z.object({id,projectId:id,date,amount:z.number().positive().max(10000000)})).max(5000),
+ payments: z.array(z.object({id,projectId:id,date,source:z.enum(['manual','completion']).optional(),amount:z.number().positive().max(10000000)})).max(5000),
  settings: z.object({projectsPerDay:z.number().int().min(2).max(5).default(3),displayName:z.string().max(80).default('You'),studioOverrideDate:z.union([date,z.literal('')]).default(''),studioSkipDate:z.union([date,z.literal('')]).default(''),studioOverrideTitle:z.string().max(160).default('Special studio session'),studioOverrideStart:z.number().int().min(0).max(20).default(18),wake:z.string().regex(/^\d{2}:\d{2}$/),bed:z.string().regex(/^\d{2}:\d{2}$/),goal:z.number().min(1).max(10000000),water:z.number().int().min(1).max(12),energy:z.enum(['Gentle','Balanced','Focused']),focusHours:z.number().min(.5).max(6),studioDays:z.array(z.number().int().min(0).max(6)).max(3),studioWeekday:z.number().int().min(18).max(19),studioWeekend:z.number().int().min(8).max(12),reward:z.string().max(200)}),
  order: z.array(id).max(300), manual:z.boolean(),
 });
@@ -157,6 +157,19 @@ export function hydrateState(stored:unknown,defaults:Record<string,unknown>={}){
 }
 export const money=(n:number)=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n);
 export const clock=(min:number)=>{const h=Math.floor(min/60)%24,m=min%60;return `${h%12||12}:${String(m).padStart(2,'0')} ${h>=12?'PM':'AM'}`;};
+export function paymentRemaining(s:State,p:Project){
+ const paid=s.payments.filter(payment=>payment.projectId===p.id).reduce((sum,payment)=>sum+Math.round(payment.amount*100),0);
+ return Math.max(0,Math.round(p.amount*100)-paid)/100;
+}
+// Only the transition to Done records payment. Reopening preserves the ledger;
+// repeat completion adds only a remaining balance, never the full amount twice.
+export function recordCompletionPayments(before:State,next:State,date:string){
+ for(const p of next.projects){
+  if(p.status!=='Done'||before.projects.find(old=>old.id===p.id)?.status==='Done')continue;
+  const amount=paymentRemaining(next,p);
+  if(amount>0)next.payments.push({id:crypto.randomUUID(),projectId:p.id,date,amount,source:'completion'});
+ }
+}
 export function earned(s:State){return s.events.reduce((n,e)=>n+e.xp,0);}
 export function seed():State {
  return {projects:[],sessions:[],inbox:[],events:[],payments:[],order:[],manual:false,settings:{projectsPerDay:3,displayName:'You',studioOverrideDate:'',studioSkipDate:'',studioOverrideTitle:'Special studio session',studioOverrideStart:18,wake:'06:00',bed:'23:00',goal:5000,water:6,energy:'Balanced',focusHours:4.5,studioDays:[2,4,6],studioWeekday:18,studioWeekend:10,reward:'Choose a personal reward for reaching level 5'}};

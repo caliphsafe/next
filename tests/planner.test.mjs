@@ -90,3 +90,31 @@ test('New York live clock follows daylight saving time and uses midnight as zero
  assert.equal(minuteOfDay(new Date('2026-12-14T16:00:00Z')),660);
  assert.equal(minuteOfDay(new Date('2026-10-14T04:00:00Z')),0);
 });
+
+test('campaign completion automatically pays the remaining attached amount once',async()=>{
+ const {recordCompletionPayments,paymentRemaining}=await import('../lib/model.ts');
+ const before=seed(),p=before.projects[0];p.amount=800;
+ before.payments.push({id:'deposit',projectId:p.id,date:'2026-09-01',amount:400});
+ const next=structuredClone(before);next.projects[0].status='Done';
+ recordCompletionPayments(before,next,'2026-10-14');
+ assert.equal(next.payments.length,2);assert.equal(next.payments[1].amount,400);
+ assert.equal(next.payments[1].source,'completion');assert.equal(next.payments[1].date,'2026-10-14');
+ assert.equal(paymentRemaining(next,next.projects[0]),0);assert.ok(stateSchema.safeParse(next).success);
+ recordCompletionPayments(before,next,'2026-10-14');assert.equal(next.payments.length,2);
+ const reopened=structuredClone(next);reopened.projects[0].status='Active';
+ const finishedAgain=structuredClone(reopened);finishedAgain.projects[0].status='Done';
+ recordCompletionPayments(reopened,finishedAgain,'2026-10-15');assert.equal(finishedAgain.payments.length,2);
+});
+test('completion handles no amount, overpayment, potential amounts, and cents without double counting',async()=>{
+ const {recordCompletionPayments}=await import('../lib/model.ts');
+ for(const [amount,paid,expected] of [[0,0,0],[100,120,0],[100.30,100.10,.20],[3000,0,3000]]){
+  const before=seed(),p=before.projects[0];p.amount=amount;p.certainty='Potential';
+  if(paid)before.payments.push({id:'paid',projectId:p.id,date:'2026-10-01',amount:paid});
+  const next=structuredClone(before);next.projects[0].status='Done';recordCompletionPayments(before,next,'2026-10-14');
+  assert.equal(next.payments.filter(p=>p.source==='completion').reduce((sum,p)=>sum+p.amount,0),expected);
+ }
+});
+test('ordinary edits to already completed campaigns do not re-add a corrected payment',async()=>{
+ const {recordCompletionPayments}=await import('../lib/model.ts');const before=seed();before.projects[0].status='Done';before.projects[0].amount=800;
+ const next=structuredClone(before);next.projects[0].notes='Updated';recordCompletionPayments(before,next,'2026-10-14');assert.equal(next.payments.length,0);
+});
