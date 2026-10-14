@@ -30,7 +30,8 @@ test('logged blocks reserve daily capacity, preserve unfinished tasks, and advan
  assert.equal(work[0].completed,true);assert.equal(work[0].end-work[0].start,25);
  assert.notEqual(work.find(x=>!x.completed).projectId,p.id);assert.equal(t.done,false);
  assert.ok(work.reduce((a,x)=>a+x.end-x.start,0)<=s.settings.focusHours*60);
- assert.equal(work.filter(x=>!x.completed&&x.taskId===t.id).reduce((a,x)=>a+x.end-x.start,0),20);
+ assert.equal(work.filter(x=>x.taskId===t.id).length,1,'Past plan has a single logged entry');
+ const upcoming=schedule(s,'2026-10-13',{minute:660}).filter(x=>x.kind==='work'&&x.taskId===t.id);assert.equal(upcoming.length,1);assert.equal(upcoming[0].end-upcoming[0].start,20);
 });
 test('legacy saved workspaces load with new defaults and unsafe chat URLs are rejected',()=>{
  const s=seed();delete s.sessions;delete s.settings.projectsPerDay;const parsed=stateSchema.parse(s);
@@ -117,4 +118,44 @@ test('completion handles no amount, overpayment, potential amounts, and cents wi
 test('ordinary edits to already completed campaigns do not re-add a corrected payment',async()=>{
  const {recordCompletionPayments}=await import('../lib/model.ts');const before=seed();before.projects[0].status='Done';before.projects[0].amount=800;
  const next=structuredClone(before);next.projects[0].notes='Updated';recordCompletionPayments(before,next,'2026-10-14');assert.equal(next.payments.length,0);
+});
+
+test('long missions appear once across lunch and never repeat the active task',()=>{
+ for(const minute of [480,690,719,780])for(const active of [false,true]){
+  const s=seed();s.projects.forEach(p=>p.tasks.forEach(t=>t.minutes=240));
+  const p=s.projects[0],t=p.tasks[0];
+  const work=schedule(s,'2026-10-14',{minute,active:active?{projectId:p.id,taskId:t.id,minutes:20}:undefined}).filter(x=>x.kind==='work');
+  const ids=work.map(x=>x.projectId+':'+x.taskId);assert.equal(new Set(ids).size,ids.length);
+  if(active)assert.equal(work.filter(x=>x.taskId===t.id).length,1);
+  else assert.ok(work.some(x=>x.remainingMinutes>0));
+ }
+});
+test('an exhausted estimate is flagged for review rather than presented as five minutes left',()=>{
+ const s=seed(),p=s.projects[0],t=p.tasks[0];s.sessions.push({id:'overrun',projectId:p.id,taskId:t.id,title:t.title,date:'2026-10-14',minutes:60});
+ const slot=schedule(s,'2026-10-14',{minute:780}).find(x=>x.taskId===t.id);
+ assert.equal(slot.needsEstimateReview,true);assert.equal(slot.remainingMinutes,0);assert.equal(t.done,false);
+});
+test('conversation review validates campaign identity and bounded planning estimates',async()=>{
+ const {parseReview}=await import('../lib/conversation-review.ts');
+ const valid={campaignId:'sample-a',summary:'Status not yet verified',nextSteps:[{title:'Check deployment',minutes:20,evidence:'User asked to verify deployment; result not provided.'}]};
+ assert.equal(parseReview('```json\n'+JSON.stringify(valid)+'\n```','sample-a').nextSteps.length,1);
+ assert.throws(()=>parseReview(JSON.stringify(valid),'other'));
+ assert.throws(()=>parseReview(JSON.stringify({...valid,nextSteps:[{...valid.nextSteps[0],minutes:0}]}),'sample-a'));
+ assert.throws(()=>parseReview('not json','sample-a'));
+});
+test('review import skips existing and repeated titles including completed missions and is idempotent',async()=>{
+ const {applyReview,reviewOptions}=await import('../lib/conversation-review.ts');
+ const p=stateSchema.parse(seed()).projects[0];p.tasks[0].done=true;
+ const review={campaignId:p.id,summary:'Imported review with evidence',nextSteps:[{title:p.tasks[0].title.toUpperCase()+'!',minutes:20,evidence:'Already recorded'},{title:'Verify deployment',minutes:25,evidence:'Deployment has not been verified'},{title:'Verify deployment!',minutes:25,evidence:'Repeated suggestion'}]};
+ assert.deepEqual(reviewOptions(p,review).map(x=>x.duplicate),[true,false,true]);
+ const saved=applyReview(p,review,[0,1,2],'2026-10-14T16:30:00Z');
+ assert.equal(saved.tasks.length,p.tasks.length+1);assert.equal(saved.tasks[0].title,'Verify deployment');assert.equal(saved.tasks[0].done,false);assert.equal(saved.tasks[1].done,true);
+ assert.equal(saved.amount,p.amount);assert.equal(saved.status,p.status);assert.equal(saved.priority,p.priority);
+ assert.equal(applyReview(saved,review,[0,1,2],'2026-10-14T16:31:00Z').tasks.length,saved.tasks.length);
+ assert.ok(stateSchema.safeParse({...seed(),projects:[saved]}).success);
+});
+test('review import respects deselected suggestions and can save recap alone',async()=>{
+ const {applyReview}=await import('../lib/conversation-review.ts');const p=stateSchema.parse(seed()).projects[0];
+ const review={campaignId:p.id,summary:'No verified change yet',nextSteps:[{title:'Check current build',minutes:15,evidence:'Needs verification'}]};
+ const saved=applyReview(p,review,[],'2026-10-14T16:30:00Z');assert.deepEqual(saved.tasks,p.tasks);assert.equal(saved.conversation.recap,review.summary);
 });

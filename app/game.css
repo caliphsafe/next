@@ -453,3 +453,15 @@ footer>span:first-child { color: #a4b77d; }
 .live-task-actions .check-button {color:#bcf574;border:1px solid #415632;background:#17251a;}
 .live-task-actions button:disabled,.next-bottom button:disabled {opacity:.5;cursor:default;}
 @media(max-width:600px){.live-task-actions{flex-direction:column;gap:4px}.live-task-actions button{width:30px;height:30px}}
+
+.mission-estimate {display:block;margin:7px 0;color:#baca93;font-size:12px;line-height:1.6;}
+.task-evidence {display:block!important;white-space:normal!important;text-align:left!important;font-size:12px!important;line-height:1.6;color:#b0bfcd;margin-top:7px;}
+.review-form>h3 {margin:18px 0 0;color:#d9f5a5;}
+.review-form>p,.review-summary {line-height:1.7;white-space:pre-wrap;}
+.review-option {display:flex!important;flex-direction:row!important;align-items:flex-start;gap:12px;padding:14px;border:1px solid #334a59;background:#101e2b;}
+.review-option input {width:18px!important;min-width:18px;height:18px;margin-top:4px;accent-color:#c0f471;}
+.review-option strong,.review-option small {display:block;}
+.review-option small {margin-top:7px;color:#b8ce9c;}
+.review-option p {font-size:13px;line-height:1.6;font-weight:400;color:#b9c6d2;}
+.review-option.duplicate {opacity:.65;}
+.review-form summary {cursor:pointer;padding:12px 0;}

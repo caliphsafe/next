@@ -1,10 +1,10 @@
 import { z } from 'zod';
 const id = z.string().min(1).max(120);
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-export const taskSchema = z.object({ id, title: z.string().min(1).max(400), minutes: z.number().int().min(5).max(480), assistedMinutes: z.number().int().min(5).max(480).optional(), done: z.boolean() });
+export const taskSchema = z.object({ id, title: z.string().min(1).max(400), minutes: z.number().int().min(5).max(480), evidence:z.string().max(2000).optional(), assistedMinutes: z.number().int().min(5).max(480).optional(), done: z.boolean() });
 export const conversationSchema = z.object({
  title:z.string().max(200).default(''), url:z.string().max(2000).refine(value=>{if(!value)return true;try{const u=new URL(value);return u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)&&!u.username&&!u.password&&u.port==='';}catch{return false}},'Use a ChatGPT conversation URL').default(''),
- recap:z.string().max(6000).default(''), nextStep:z.string().max(1000).default(''), updatedAt:z.string().max(40).default('')
+ reviewImportedAt:z.string().datetime().optional(), recap:z.string().max(6000).default(''), nextStep:z.string().max(1000).default(''), updatedAt:z.string().max(40).default('')
 });
 export const projectSchema = z.object({
  id, title: z.string().min(1).max(160), category: z.enum(['Client','Business','Music','Personal']),
@@ -52,7 +52,7 @@ export function why(p:Project,s:State,date:string) {
  if(p.certainty==='Agreed'&&p.amount) return 'Agreed payment potential';
  return p.priority==='High'?'Priority boost':p.priority==='Later'?'Intentionally later':'Long-term progress';
 }
-export type Slot={id:string,start:number,end:number,title:string,detail:string,kind:'work'|'routine'|'break'|'studio',projectId?:string,taskId?:string,completed?:boolean,active?:boolean};
+export type Slot={id:string,start:number,end:number,title:string,detail:string,kind:'work'|'routine'|'break'|'studio',projectId?:string,taskId?:string,completed?:boolean,active?:boolean,remainingMinutes?:number,needsEstimateReview?:boolean};
 export function studioFor(s:State,date:string) {
  const dow=weekday(date);
  if(date===s.settings.studioOverrideDate) return {start:s.settings.studioOverrideStart*60,title:s.settings.studioOverrideTitle,detail:'4 hours · special session; confirm timing with collaborators'};
@@ -102,7 +102,11 @@ export function schedule(s:State,date:string,live?:LivePlan):Slot[] {
   // Completed effort consumes capacity. Logs use actual time; legacy completions use estimates.
   const history=logs.map(log=>({p:s.projects.find(p=>p.id===log.projectId),taskId:log.taskId,title:log.title,minutes:log.minutes}));
   for(const p of s.projects)for(const t of p.tasks)if(t.done&&!logs.some(l=>l.taskId===t.id)&&s.events.some(e=>e.id==='task:'+t.id&&e.date===date))history.push({p,taskId:t.id,title:t.title,minutes:estimate(p,t)});
-  if(!live)for(const item of history){let left=item.minutes;while(left>0&&budget>0&&cursor<975){const used=place(item.p,item.taskId,item.title,Math.min(cap,left),true);if(!used)break;left-=used;}}
+  if(!live){
+   const totals=new Map<string,typeof history[number]>();
+   for(const item of history){const key=`${item.p?.id}:${item.taskId}`,prior=totals.get(key);totals.set(key,prior?{...prior,minutes:prior.minutes+item.minutes}:item);}
+   for(const item of totals.values())place(item.p,item.taskId,item.title,item.minutes,true);
+  }
   const activeProject=live?.active?s.projects.find(p=>p.id===live.active!.projectId):undefined;
   const activeTask=activeProject?.tasks.find(t=>t.id===live?.active?.taskId&&!t.done);
   let reserved=0;
@@ -110,7 +114,7 @@ export function schedule(s:State,date:string,live?:LivePlan):Slot[] {
    reserved=place(activeProject,activeTask.id,activeTask.title,Math.max(1,live.active.minutes));
    const slot=slots.find(x=>x.taskId===activeTask.id);if(slot){slot.active=true;slot.detail+=' · in progress';}
   }
-  const waiting=eligible.map(p=>({p,tasks:p.tasks.filter(t=>!t.done).map(t=>({t,left:Math.max(5,estimate(p,t)-(s.sessions||[]).filter(l=>l.taskId===t.id).reduce((n,l)=>n+l.minutes,0))-(t.id===activeTask?.id?reserved:0)})).filter(x=>x.left>0)})).filter(q=>q.tasks.length);
+  const waiting=eligible.map(p=>({p,tasks:p.tasks.filter(t=>!t.done&&t.id!==activeTask?.id&&(live||!history.some(h=>h.taskId===t.id))).map(t=>{const remaining=estimate(p,t)-(s.sessions||[]).filter(l=>l.taskId===t.id).reduce((n,l)=>n+l.minutes,0);return {t,left:remaining>0?remaining:cap,remaining,needsReview:remaining<=0};}).filter(x=>x.left>0)})).filter(q=>q.tasks.length);
   const queues=waiting.splice(0,s.settings.projectsPerDay||3);
   // A rank change takes precedence over the previous rotation.
   const last=logs.at(-1),lastIndex=queues.findIndex(q=>q.p.id===(activeProject?.id||last?.projectId));
@@ -124,7 +128,11 @@ export function schedule(s:State,date:string,live?:LivePlan):Slot[] {
     if(!queues[i].tasks.length&&waiting.length)queues[i]=waiting.shift()!;
     const q=queues[i],item=q.tasks[0];if(!item||budget<5||cursor>=975)continue;
     const used=place(q.p,item.t.id,item.t.title,Math.min(cap,item.left));
-    if(!used)continue;progressed=true;item.left-=used;if(item.left<=0)q.tasks.shift();
+    if(!used)continue;progressed=true;
+    const slot=slots.findLast(x=>x.taskId===item.t.id&&x.kind==='work');
+    if(slot){slot.remainingMinutes=Math.max(0,item.remaining-used);slot.needsEstimateReview=item.needsReview;}
+    // One visible block per mission. Unfinished work returns after logging progress.
+    q.tasks.shift();
    }
    if(!progressed)break;
   }
