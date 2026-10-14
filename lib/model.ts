@@ -1,7 +1,20 @@
 import { z } from 'zod';
 const id = z.string().min(1).max(120);
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-export const taskSchema = z.object({ id, title: z.string().min(1).max(400), minutes: z.number().int().min(5).max(480), evidence:z.string().max(2000).optional(), assistedMinutes: z.number().int().min(5).max(480).optional(), done: z.boolean() });
+export function dependencyError(tasks:{id:string,title:string,dependsOn?:string[]}[]):string{
+ const byId=new Map(tasks.map(t=>[t.id,t]));
+ if(byId.size!==tasks.length)return 'Each mission must have a unique ID.';
+ const done=new Set<string>(),visiting=new Set<string>();
+ function visit(id:string):string{
+  if(visiting.has(id))return 'Dependencies cannot form a loop.';
+  if(done.has(id))return '';
+  const task=byId.get(id);if(!task)return 'A prerequisite is missing. Remove its dependency before deleting the mission.';
+  visiting.add(id);for(const dep of task.dependsOn||[]){const error=visit(dep);if(error)return error;}
+  visiting.delete(id);done.add(id);return '';
+ }
+ for(const task of tasks){const error=visit(task.id);if(error)return error;}return '';
+}
+export const taskSchema = z.object({ id, title: z.string().min(1).max(400), minutes: z.number().int().min(5).max(480), dependsOn:z.array(id).max(200).optional(), waiting:z.object({on:z.string().trim().min(1).max(160),reason:z.string().trim().min(1).max(1000),since:z.string().datetime(),receivedAt:z.string().datetime().optional()}).optional(), evidence:z.string().max(2000).optional(), assistedMinutes: z.number().int().min(5).max(480).optional(), done: z.boolean() });
 export const conversationSchema = z.object({
  title:z.string().max(200).default(''), url:z.string().max(2000).refine(value=>{if(!value)return true;try{const u=new URL(value);return u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)&&!u.username&&!u.password&&u.port==='';}catch{return false}},'Use a ChatGPT conversation URL').default(''),
  reviewImportedAt:z.string().datetime().optional(), recap:z.string().max(6000).default(''), nextStep:z.string().max(1000).default(''), updatedAt:z.string().max(40).default('')
@@ -13,7 +26,7 @@ export const projectSchema = z.object({
  priority: z.enum(['Next','High','Auto','Later']), status: z.enum(['Active','Waiting','Paused','Done']),
  workMode:z.enum(['Solo','ChatGPT']).default('Solo'), conversation:conversationSchema.default({title:'',url:'',recap:'',nextStep:'',updatedAt:''}),
  notes: z.string().max(10000), dependency: z.string().max(120), tasks: z.array(taskSchema).max(200),
-});
+}).superRefine((p,ctx)=>{const message=dependencyError(p.tasks);if(message)ctx.addIssue({code:z.ZodIssueCode.custom,message,path:['tasks']});});
 export const stateSchema = z.object({
  projects: z.array(projectSchema).max(300),
  sessions:z.array(z.object({id,projectId:id,taskId:id,date,title:z.string().max(400),minutes:z.number().int().min(1).max(480),ranking:z.string().max(40000).optional()})).max(20000).default([]),
@@ -32,6 +45,24 @@ export function minuteOfDay(now=new Date()){const parts=new Intl.DateTimeFormat(
 export const addDays=(date:string,n:number)=>new Date(Date.parse(date+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
 export const weekday=(date:string)=>new Date(date+'T12:00:00Z').getUTCDay();
 export function blocked(p:Project,s:State) {return !!p.dependency && s.projects.some(q=>q.id===p.dependency&&q.status!=='Done');}
+export function isWaiting(t:Task){return !!t.waiting&&!t.waiting.receivedAt;}
+export function taskBlockReason(p:Project,t:Task,seen=new Set<string>()):string{
+ if(seen.has(t.id))return 'Dependency loop — edit prerequisites';
+ if(isWaiting(t))return `Waiting for ${t.waiting!.on}: ${t.waiting!.reason}`;
+ const path=new Set(seen);path.add(t.id);
+ for(const id of t.dependsOn||[]){
+  const prerequisite=p.tasks.find(q=>q.id===id);
+  if(!prerequisite)return 'Prerequisite missing — edit dependencies';
+  const reason=taskBlockReason(p,prerequisite,path);
+  if(reason)return reason;
+  if(!prerequisite.done&&!prerequisite.waiting?.receivedAt)return `Finish “${prerequisite.title}” first`;
+ }
+ return '';
+}
+export function taskReady(p:Project,t:Task){return !t.done&&!taskBlockReason(p,t);}
+export function receiveResponse(p:Project,taskId:string,now:string){
+ const t=p.tasks.find(t=>t.id===taskId);if(t&&isWaiting(t))t.waiting={...t.waiting!,receivedAt:now};
+}
 export function score(p:Project,date:string) {
  const days=p.deadline?(Date.parse(p.deadline)-Date.parse(date))/86400000:999;
  const urgency=days<=0?1000:days<=7?500-days*25:days<=21?180-days*4:0;
@@ -46,6 +77,7 @@ export function ranked(s:State,date:string) {return [...s.projects].sort((a,b)=>
 export function why(p:Project,s:State,date:string) {
  if(p.status!=='Active') return p.status==='Done'?'Campaign complete':`${p.status} · excluded from daily work`;
  if(blocked(p,s)) return `Waiting for ${s.projects.find(q=>q.id===p.dependency)?.title}`;
+ if(p.tasks.some(t=>!t.done)&&!p.tasks.some(t=>taskReady(p,t)))return 'Open missions are waiting on responses or prerequisites';
  if(s.manual) return 'Your custom order';
  if(p.priority==='Next') return 'Your next priority';
  if(p.deadline) return `Due ${p.deadline.slice(5)}${p.deadlineNote?' · proposed target':''}`;
@@ -61,7 +93,7 @@ export function studioFor(s:State,date:string) {
  return {start:(dow===0||dow===6?s.settings.studioWeekend:s.settings.studioWeekday)*60,title:'Studio session',detail:'4 hours · advance one track or recording milestone'};
 }
 export type LivePlan={minute:number,active?:{projectId:string,taskId:string,minutes:number}};
-export const rankingKey=(s:State,date:string)=>ranked(s,date).filter(p=>p.status==='Active'&&!blocked(p,s)&&p.category!=='Music'&&p.tasks.some(t=>!t.done)).map(p=>p.id).join('|');
+export const rankingKey=(s:State,date:string)=>ranked(s,date).filter(p=>p.status==='Active'&&!blocked(p,s)&&p.category!=='Music'&&p.tasks.some(t=>taskReady(p,t))).map(p=>p.id).join('|');
 export function schedule(s:State,date:string,live?:LivePlan):Slot[] {
  const slots:Slot[]=[]; const [h,m]=s.settings.wake.split(':').map(Number);const wake=Math.max(0,Math.min(1439,h*60+m));
  const add=(id:string,start:number,end:number,title:string,detail:string,kind:Slot['kind']='routine')=>slots.push({id,start,end,title,detail,kind});
@@ -79,7 +111,7 @@ export function schedule(s:State,date:string,live?:LivePlan):Slot[] {
  if(shower>435&&[1,3,5].includes(dow)&&ready+30<=720){add('workout',ready,ready+30,'Workout','A shorter session for a later start');ready+=30;}
  if(!weekend){
   const logs=(s.sessions||[]).filter(x=>x.date===date);
-  const eligible=ranked(s,date).filter(p=>p.status==='Active'&&!blocked(p,s)&&p.category!=='Music'&&p.tasks.some(t=>!t.done));
+  const eligible=ranked(s,date).filter(p=>p.status==='Active'&&!blocked(p,s)&&p.category!=='Music'&&p.tasks.some(t=>taskReady(p,t)));
   const cap=s.settings.energy==='Gentle'?25:s.settings.energy==='Focused'?50:40;
   let cursor=live?Math.max(ready,live.minute):ready,budget=live?Math.max(0,975-cursor):Math.round(s.settings.focusHours*60);
   // Today's timeline is upcoming work; completed effort remains in the wins ledger.
@@ -108,13 +140,13 @@ export function schedule(s:State,date:string,live?:LivePlan):Slot[] {
    for(const item of totals.values())place(item.p,item.taskId,item.title,item.minutes,true);
   }
   const activeProject=live?.active?s.projects.find(p=>p.id===live.active!.projectId):undefined;
-  const activeTask=activeProject?.tasks.find(t=>t.id===live?.active?.taskId&&!t.done);
+  const activeTask=activeProject?.tasks.find(t=>t.id===live?.active?.taskId&&taskReady(activeProject!,t)&&activeProject!.status==='Active'&&!blocked(activeProject!,s));
   let reserved=0;
   if(live?.active&&activeProject&&activeTask){
    reserved=place(activeProject,activeTask.id,activeTask.title,Math.max(1,live.active.minutes));
    const slot=slots.find(x=>x.taskId===activeTask.id);if(slot){slot.active=true;slot.detail+=' · in progress';}
   }
-  const waiting=eligible.map(p=>({p,tasks:p.tasks.filter(t=>!t.done&&t.id!==activeTask?.id&&(live||!history.some(h=>h.taskId===t.id))).map(t=>{const remaining=estimate(p,t)-(s.sessions||[]).filter(l=>l.taskId===t.id).reduce((n,l)=>n+l.minutes,0);return {t,left:remaining>0?remaining:cap,remaining,needsReview:remaining<=0};}).filter(x=>x.left>0)})).filter(q=>q.tasks.length);
+  const waiting=eligible.map(p=>({p,tasks:p.tasks.filter(t=>taskReady(p,t)&&t.id!==activeTask?.id&&(live||!history.some(h=>h.taskId===t.id))).map(t=>{const remaining=estimate(p,t)-(s.sessions||[]).filter(l=>l.taskId===t.id).reduce((n,l)=>n+l.minutes,0);return {t,left:remaining>0?remaining:cap,remaining,needsReview:remaining<=0};}).filter(x=>x.left>0)})).filter(q=>q.tasks.length);
   const queues=waiting.splice(0,s.settings.projectsPerDay||3);
   // A rank change takes precedence over the previous rotation.
   const last=logs.at(-1),lastIndex=queues.findIndex(q=>q.p.id===(activeProject?.id||last?.projectId));
@@ -140,8 +172,8 @@ export function schedule(s:State,date:string,live?:LivePlan):Slot[] {
  }
  if(studio){
   for(let i=slots.length-1;i>=0;i--) if(slots[i].start<studio.start+240&&slots[i].end>studio.start)slots.splice(i,1);
-  const music=ranked(s,date).find(p=>p.category==='Music'&&p.status==='Active'&&!blocked(p,s)&&p.tasks.some(t=>!t.done));
-  slots.push({id:'studio',start:studio.start,end:studio.start+240,title:studio.title,detail:music?music.title+' · '+music.tasks.find(t=>!t.done)!.title:studio.detail,kind:'studio',projectId:music?.id});
+  const music=ranked(s,date).find(p=>p.category==='Music'&&p.status==='Active'&&!blocked(p,s)&&p.tasks.some(t=>taskReady(p,t)));
+  slots.push({id:'studio',start:studio.start,end:studio.start+240,title:studio.title,detail:music?music.title+' · '+music.tasks.find(t=>taskReady(music,t))!.title:studio.detail,kind:'studio',projectId:music?.id});
   if(weekend)add('studio-meal',studio.start+240,studio.start+270,'Meal & recovery','Reset after the session','break');
  }
  add('dinner',studio&&!weekend?1020:1140,studio&&!weekend?1065:1185,'Dinner',studio&&!weekend?'Before studio · leave room for travel':'A proper evening meal');
@@ -150,7 +182,7 @@ export function schedule(s:State,date:string,live?:LivePlan):Slot[] {
  return slots.filter(slot=>!live||slot.end>live.minute).sort((a,b)=>a.start-b.start);
 }
 export function estimate(p:Project,t:Task){return p.workMode==='ChatGPT'?(t.assistedMinutes??t.minutes):t.minutes;}
-export function handoff(p:Project,t?:Task){return [`Continue our work on ${p.title}.`,p.conversation?.title?`Conversation: ${p.conversation.title}`:'',`Current mission: ${t?.title||p.conversation?.nextStep||p.tasks.find(t=>!t.done)?.title||'Choose the next concrete action'}`,p.conversation?.nextStep?`Next move from the saved brief: ${p.conversation.nextStep}`:'',t?`Planning estimate: ${estimate(p,t)} minutes, including my review and testing.`:'',p.conversation?.recap?`Saved context (${p.conversation.updatedAt||'date not recorded'}): ${p.conversation.recap}`:'',p.notes?`Project notes: ${p.notes}`:'','First check what is already complete in this conversation. Help me produce the next usable deliverable, then summarize what changed, remaining steps, blockers, and a revised time estimate so I can update NEXT.'].filter(Boolean).join('\n\n');}
+export function handoff(p:Project,t?:Task){return [`Continue our work on ${p.title}.`,p.conversation?.title?`Conversation: ${p.conversation.title}`:'',`Current mission: ${t?.title||p.tasks.find(t=>taskReady(p,t))?.title||'No ready mission. Check external holds and prerequisites before working.'}`,p.conversation?.nextStep?`Next move from the saved brief: ${p.conversation.nextStep}`:'',t?`Planning estimate: ${estimate(p,t)} minutes, including my review and testing.`:'',p.conversation?.recap?`Saved context (${p.conversation.updatedAt||'date not recorded'}): ${p.conversation.recap}`:'',p.notes?`Project notes: ${p.notes}`:'',p.tasks.some(isWaiting)?`Unresolved external holds (do not assume a response arrived): ${p.tasks.filter(isWaiting).map(t=>`${t.title}: ${t.waiting!.on} — ${t.waiting!.reason}`).join('; ')}`:'','First check what is already complete in this conversation. Help me produce the next usable deliverable, then summarize what changed, remaining steps, blockers, and a revised time estimate so I can update NEXT.'].filter(Boolean).join('\n\n');}
 export function hydrateState(stored:unknown,defaults:Record<string,unknown>={}){
  const raw=stored as Record<string,unknown>;
  const projects=(raw.projects as Record<string,unknown>[]).map(p=>{

@@ -159,3 +159,51 @@ test('review import respects deselected suggestions and can save recap alone',as
  const review={campaignId:p.id,summary:'No verified change yet',nextSteps:[{title:'Check current build',minutes:15,evidence:'Needs verification'}]};
  const saved=applyReview(p,review,[],'2026-10-14T16:30:00Z');assert.deepEqual(saved.tasks,p.tasks);assert.equal(saved.conversation.recap,review.summary);
 });
+
+test('external holds exclude the waiting mission and follow-ups regardless of ranking',async()=>{
+ const {isWaiting}=await import('../lib/model.ts');const s=seed(),p=s.projects[0];p.priority='Next';
+ p.tasks[0].waiting={on:'Client',reason:'Need feedback',since:'2026-10-01T12:00:00Z'};
+ p.tasks[1].dependsOn=[p.tasks[0].id];
+ s.manual=true;s.order=[p.id,...s.order.filter(id=>id!==p.id)];
+ for(const date of ['2026-10-14','2026-11-02']){
+  const work=schedule(s,date,{minute:780}).filter(x=>x.kind==='work');
+  assert.ok(!work.some(x=>[p.tasks[0].id,p.tasks[1].id].includes(x.taskId)));
+  assert.ok(work.some(x=>x.taskId===p.tasks[2].id),'Independent work in the same campaign remains available');
+  assert.ok(work.some(x=>x.projectId!==p.id),'Other campaigns fill available time');
+ }
+ assert.ok(isWaiting(p.tasks[0]),'Time does not release a hold');
+});
+test('a completed send-for-review task can hold follow-ups until an explicit response',async()=>{
+ const {receiveResponse,taskReady,recordCompletionPayments}=await import('../lib/model.ts');const s=seed(),p=s.projects[0],a=p.tasks[0],b=p.tasks[1];
+ a.done=true;a.waiting={on:'Reviewer',reason:'Approval',since:'2026-10-14T12:00:00Z'};b.dependsOn=[a.id];
+ assert.equal(taskReady(p,b),false);const before=structuredClone(s);
+ receiveResponse(p,a.id,'2026-10-14T17:00:00Z');
+ assert.equal(taskReady(p,b),true);assert.equal(b.done,false);assert.equal(s.events.length,0);
+ recordCompletionPayments(before,s,'2026-10-14');assert.equal(s.payments.length,0);
+ assert.ok(schedule(s,'2026-10-14',{minute:780}).some(x=>x.taskId===b.id));
+});
+test('multiple prerequisites and transitive chains all remain enforced',async()=>{
+ const {taskReady,receiveResponse}=await import('../lib/model.ts');const p=seed().projects[0],[a,b,c]=p.tasks;
+ a.waiting={on:'Client',reason:'Files',since:'2026-10-14T12:00:00Z'};b.dependsOn=[a.id];c.dependsOn=[b.id];
+ assert.equal(taskReady(p,b),false);assert.equal(taskReady(p,c),false);
+ receiveResponse(p,a.id,'2026-10-14T17:00:00Z');assert.equal(taskReady(p,b),true);assert.equal(taskReady(p,c),false);
+ b.done=true;assert.equal(taskReady(p,c),true);
+ b.waiting={on:'Supplier',reason:'Dimensions',since:'2026-10-14T17:00:00Z'};c.dependsOn=[a.id,b.id];assert.equal(taskReady(p,c),false);
+ receiveResponse(p,b.id,'2026-10-14T18:00:00Z');assert.equal(taskReady(p,c),true);
+});
+test('newly blocked active timers and studio tasks cannot bypass holds',()=>{
+ const s=seed(),p=s.projects[0],t=p.tasks[0];t.waiting={on:'Client',reason:'Access',since:'2026-10-14T12:00:00Z'};
+ const plan=schedule(s,'2026-10-14',{minute:780,active:{projectId:p.id,taskId:t.id,minutes:20}});
+ assert.ok(!plan.some(x=>x.taskId===t.id));
+ const music=s.projects.find(p=>p.category==='Music');music.priority='Next';music.tasks.forEach(t=>{t.waiting={on:'Collaborator',reason:'Stems',since:'2026-10-14T12:00:00Z'}});
+ assert.notEqual(schedule(s,'2026-10-15').find(x=>x.kind==='studio').projectId,music.id);
+});
+test('invalid dependency graphs cannot save and imported missions preserve external holds',async()=>{
+ const {applyReview}=await import('../lib/conversation-review.ts');const s=seed(),p=s.projects[0],[a,b]=p.tasks;
+ a.dependsOn=[b.id];b.dependsOn=[a.id];assert.equal(stateSchema.safeParse(s).success,false);
+ delete a.dependsOn;b.dependsOn=['missing'];assert.equal(stateSchema.safeParse(s).success,false);
+ delete b.dependsOn;a.waiting={on:'Client',reason:'Files',since:'2026-10-14T12:00:00Z'};
+ const saved=applyReview(stateSchema.parse(s).projects[0],{campaignId:p.id,summary:'Draft next action',nextSteps:[{title:'Build new section',minutes:30,evidence:'Suggested in conversation'}]},[0],'2026-10-14T17:00:00Z');
+ assert.deepEqual(saved.tasks[0].dependsOn,[a.id]);assert.deepEqual(saved.tasks.find(t=>t.id===a.id).waiting,a.waiting);
+ const plan=schedule({...s,projects:[saved]},'2026-10-14',{minute:780});assert.ok(!plan.some(x=>x.taskId===saved.tasks[0].id));
+});
