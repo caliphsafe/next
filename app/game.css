@@ -431,3 +431,25 @@ footer>span:first-child { color: #a4b77d; }
 @media (prefers-reduced-motion: reduce) {
   .button,.campaign,.meter i { transition: none; }
 }
+
+/* Campaign rotation and saved conversation brief. */
+.cadence-strip {display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin:0 0 24px;padding:20px;border:1px solid #345357;background:linear-gradient(110deg,#102b30,#121724);border-left:3px solid #a6f749;}
+.cadence-strip>div:first-child {display:grid;gap:7px;flex:1 1 240px;}
+.cadence-strip strong {font-size:20px;color:#f1f7ec;}
+.cadence-strip small,.conversation-card small {color:#a6b7c6;line-height:1.6;}
+.rotation-pills {display:flex;flex-wrap:wrap;gap:8px;flex:2 1 320px;}
+.rotation-pills button {display:flex;align-items:center;gap:9px;padding:10px 12px;border:1px solid #36525a;color:#d7e8ea;background:#0a171e;text-align:left;font-size:12px;}
+.rotation-pills b {color:#bafa57;font-family:monospace;}
+.conversation-card {padding:18px;border:1px solid #385263;background:#101e2b;margin:18px 0;overflow-wrap:anywhere;}
+.conversation-card h3 {margin:0;}
+.conversation-card>strong {display:block;color:#bcf574;}
+.conversation-card p {font-size:13px;line-height:1.7;}
+.conversation-actions {display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:16px;}
+.task-edit.assisted {grid-template-columns:minmax(0,1fr) 64px 64px 30px;}
+.focus-player {flex-wrap:wrap;}
+@media(max-width:600px){.cadence-strip{gap:12px;padding:16px}.rotation-pills{flex-basis:100%}.task-edit.assisted{grid-template-columns:minmax(0,1fr) 52px 52px 26px;gap:5px}.focus-player .focus-name{flex-basis:60%}.conversation-actions .button{width:100%;justify-content:center}}
+
+.live-task-actions {display:flex;align-items:center;gap:5px;}
+.live-task-actions .check-button {color:#bcf574;border:1px solid #415632;background:#17251a;}
+.live-task-actions button:disabled,.next-bottom button:disabled {opacity:.5;cursor:default;}
+@media(max-width:600px){.live-task-actions{flex-direction:column;gap:4px}.live-task-actions button{width:30px;height:30px}}

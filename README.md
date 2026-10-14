@@ -50,3 +50,17 @@ Production bundle and TypeScript checks pass. Planner tests cover financial seed
 ## Private initial data
 
 Client names, financial details, and personal schedule overrides are excluded from this public repository. Split a validated State JSON object into server-only secrets `INITIAL_WORKSPACE_JSON_1`, `_2`, and `_3` (each under the hosting value-size limit) when provisioning a private instance. It initializes an authenticated user’s workspace once; subsequent edits are stored in D1. Without it, new accounts start with an empty project list. Never put that value in client code, Git, or a NEXT_PUBLIC environment variable.
+
+### Campaign rotation and ChatGPT co-op
+
+Weekdays rotate across 3 eligible campaigns by default (adjustable from 2–5). Priority chooses the roster and initial order; each campaign receives one block before the rotation repeats. Gentle/Balanced/Focused caps are 25/40/50 minutes with 10-minute breaks. Existing shower, meals, shutdown, dependency, and studio rules still apply; a short day can fit fewer campaigns. Music remains in studio blocks.
+
+Campaigns support a saved ChatGPT conversation title/link, dated recap, next step, and a copyable handoff prompt. This is **not automatic chat-history synchronization**. Update the recap after a conversation. Optional assisted task estimates replace solo estimates only in ChatGPT mode; otherwise the original estimate is used. Include review/testing time. Log a focus block to record elapsed effort and move the rotation forward without completing the mission. Logged minutes count against daily capacity and remaining estimates; an unfinished task stays visible even after exceeding its estimate. The timeline reflows as a capacity plan, not an exact historical calendar.
+
+Legacy workspace JSON receives defaults on read. Optional secret `PROJECT_CONTEXT_JSON` provides per-project initial conversation context and explicitly labeled planning estimates for existing missions; it applies only before a conversation record has been saved. User edits remain authoritative. No private conversation content belongs in the public source repository.
+
+### Live daily queue
+
+Today's dashboard schedules from the current New York time and recalculates immediately after local completion or ranking changes, and as each minute passes. It fills available weekday work time through 4:15 p.m., then preserves the existing shutdown through 5 p.m.; the focus-hours setting remains the target for other dates' forecasts. Completed tasks are shown in the wins ledger rather than reserving their old estimated durations in today's upcoming timeline. A timestamped completion protects a 10-minute recovery break. Lunch, studio, blocked/waiting campaigns, and weekends retain their existing rules.
+
+The rotation size limits concurrent campaigns, not the entire day's roster: as a campaign's estimated queue empties, the next eligible ranked campaign enters. A running timer is pinned while upcoming work recalibrates. Explicit rank changes override a prior rotation. No task is automatically marked done. Actual cross-device saved updates are polled every 15 seconds while visible and when the tab regains focus; active edits are protected and revision checks prevent overwriting concurrent saves. This is polling, not server-pushed synchronization.

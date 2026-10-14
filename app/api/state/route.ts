@@ -3,9 +3,9 @@ import { getChatGPTUser } from '../../chatgpt-auth';
 import { getDb } from '../../../db';
 import { workspaces } from '../../../db/schema';
 import { and,eq } from 'drizzle-orm';
-import { seed,stateSchema } from '../../../lib/model';
+import { seed,stateSchema,hydrateState } from '../../../lib/model';
 export const dynamic='force-dynamic';
-function initialState(){const raw=[env.INITIAL_WORKSPACE_JSON_1,env.INITIAL_WORKSPACE_JSON_2,env.INITIAL_WORKSPACE_JSON_3].join('');return raw?stateSchema.parse(JSON.parse(raw)):seed();}
+function initialState(){const raw=[env.INITIAL_WORKSPACE_JSON_1,env.INITIAL_WORKSPACE_JSON_2,env.INITIAL_WORKSPACE_JSON_3].join('');return raw?hydrateState(JSON.parse(raw),JSON.parse(env.PROJECT_CONTEXT_JSON||'{}')):seed();}
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store'}});
 export async function GET(){
  const user=await getChatGPTUser();if(!user)return json({error:'Sign in to load your workspace.'},401);
@@ -14,7 +14,7 @@ export async function GET(){
  const [row]=await db.select().from(workspaces).where(eq(workspaces.userId,user.userId));
  const stored=JSON.parse(row.payload);
   const initial=initialState();
-  return json({state:stateSchema.parse({...stored,settings:{...initial.settings,...stored.settings}}),revision:row.revision});
+  return json({state:hydrateState({...stored,settings:{...initial.settings,...stored.settings}},JSON.parse(env.PROJECT_CONTEXT_JSON||'{}')),revision:row.revision});
 }
 export async function PUT(req:Request){
  const user=await getChatGPTUser();if(!user)return json({error:'Sign in to save changes.'},401);
